@@ -1,0 +1,44 @@
+name: tf2.8
+channels:
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - cudatoolkit=11.3
+  - cudnn=8.2
+  - tensorflow=2.8  # Replace tensorflow-gpu with tensorflow
+  # - pytorch=1.13
+  - torchvision
+  # - torchaudio
+  - numpy
+  - pandas
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - scipy
+  - ipython
+  - jupyter
+  - jupyterlab
+  - notebook
+  - tqdm
+  - pip:
+      - tensorflow-addons
+      - tensorflow-datasets
+      - tensorflow-hub
+      - tensorflow-model-optimization
+      - tensorboard
+      - torchsummary
+      - transformers
+      - spacy
+      - whisper
+      - xgboost
+      - pandas
+      - scikit-image
+      - opencv-python
+      - nltk
+      - fastai
+      - timm
+      - wandb
+      - torchvision
