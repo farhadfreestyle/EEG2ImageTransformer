@@ -14,139 +14,116 @@ import seaborn as sns
 import pandas as pd
 from sklearn.cluster import KMeans
 
-style.use('seaborn')
+# Prevents duplicate library issues
 
-os.environ["CUDA_DEVICE_ORDER"]= "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"]= '3'
 
+
+# ✅ Force TensorFlow to use GPU if available
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)  # Prevents GPU memory overflow
+        tf.config.set_visible_devices(gpus[0], 'GPU')  # Use the first available GPU
+        print("Using GPU:", gpus[0])
+    except RuntimeError as e:
+        print("Error enabling GPU:", e)
+else:
+    print("No GPU found, training will run on CPU.")
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+#Fix random seed for reproducibility
 np.random.seed(45)
 tf.random.set_seed(45)
 
 if __name__ == '__main__':
-	n_channels  = 14
-	n_feat      = 128
-	batch_size  = 256
-	test_batch_size  = 1
-	n_classes   = 10
+    n_channels  = 14
+    n_feat      = 128
+    batch_size  = 256
+    test_batch_size  = 1
+    n_classes   = 10
 
-	# data_cls = natsorted(glob('data/thoughtviz_eeg_data/*'))
-	# cls2idx  = {key.split(os.path.sep)[-1]:idx for idx, key in enumerate(data_cls, start=0)}
-	# idx2cls  = {value:key for key, value in cls2idx.items()}
+    # Load EEG Dataset
+    with open('../data/eeg/image/data.pkl', 'rb') as file:
+        data = pickle.load(file, encoding='latin1')
+        train_X = data['x_train']
+        train_Y = data['y_train']
+        test_X = data['x_test']
+        test_Y = data['y_test']
 
-	with open('../../data/b2i_data/eeg/image/data.pkl', 'rb') as file:
-		data = pickle.load(file, encoding='latin1')
-		train_X = data['x_train']
-		train_Y = data['y_train']
-		test_X = data['x_test']
-		test_Y = data['y_test']
+    # Create Batches
+    train_batch = load_complete_data(train_X, train_Y, batch_size=batch_size)
+    val_batch   = load_complete_data(test_X, test_Y, batch_size=batch_size)
+    test_batch  = load_complete_data(test_X, test_Y, batch_size=test_batch_size)
+    X, Y = next(iter(train_batch))
 
+    # Initialize LSTM Model
+    triplenet = TripleNet(n_classes=n_classes)
+    opt = tf.keras.optimizers.Adam(learning_rate=3e-4)
 
-	# train_batch = load_complete_data('data/thoughtviz_eeg_data/*/train/*', batch_size=batch_size)
-	# val_batch   = load_complete_data('data/thoughtviz_eeg_data/*/val/*', batch_size=batch_size)
-	# test_batch  = load_complete_data('data/thoughtviz_eeg_data/*/test/*', batch_size=test_batch_size)
-	train_batch = load_complete_data(train_X, train_Y, batch_size=batch_size)
-	val_batch   = load_complete_data(test_X, test_Y, batch_size=batch_size)
-	test_batch  = load_complete_data(test_X, test_Y, batch_size=test_batch_size)
-	X, Y = next(iter(train_batch))
+    # Load Checkpoint if Exists
+    triplenet_ckpt = tf.train.Checkpoint(step=tf.Variable(1), model=triplenet, optimizer=opt)
+    triplenet_ckptman = tf.train.CheckpointManager(triplenet_ckpt, directory='experiments/best_ckpt', max_to_keep=5000)
+    triplenet_ckpt.restore(triplenet_ckptman.latest_checkpoint)
+    START = int(triplenet_ckpt.step) // len(train_batch)
 
-	# print(X.shape, Y.shape)
-	triplenet = TripleNet(n_classes=n_classes)
-	opt     = tf.keras.optimizers.Adam(learning_rate=3e-4)
-	triplenet_ckpt    = tf.train.Checkpoint(step=tf.Variable(1), model=triplenet, optimizer=opt)
-	triplenet_ckptman = tf.train.CheckpointManager(triplenet_ckpt, directory='experiments/best_ckpt', max_to_keep=5000)
-	triplenet_ckpt.restore(triplenet_ckptman.latest_checkpoint)
-	START = int(triplenet_ckpt.step) // len(train_batch)
-	if triplenet_ckptman.latest_checkpoint:
-		print('Restored from the latest checkpoint, epoch: {}'.format(START))
-	EPOCHS = 3000
-	cfreq  = 10 # Checkpoint frequency
+    if triplenet_ckptman.latest_checkpoint:
+        print('Restored from the latest checkpoint, epoch:', START)
 
-	for epoch in range(START, EPOCHS):
-		train_acc  = tf.keras.metrics.SparseCategoricalAccuracy()
-		train_loss = tf.keras.metrics.Mean()
-		test_acc   = tf.keras.metrics.SparseCategoricalAccuracy()
-		test_loss  = tf.keras.metrics.Mean()
+    # Training Parameters
+    EPOCHS = 3000
+    cfreq  = 10  # Checkpoint frequency
 
-		tq = tqdm(train_batch)
-		for idx, (X, Y) in enumerate(tq, start=1):
-			loss = train_step(triplenet, opt, X, Y)
-			train_loss.update_state(loss)
-			# Y_cap = triplenet(X, training=False)
-			# train_acc.update_state(Y, Y_cap)
-			# tq.set_description('Train Epoch: {}, Loss: {}, Acc: {}'.format(epoch, train_loss.result(), train_acc.result()))
-			tq.set_description('Train Epoch: {}, Loss: {}'.format(epoch, train_loss.result()))
-			# break
+    # Training Loop
+    for epoch in range(START, EPOCHS):
+        train_loss = tf.keras.metrics.Mean()
+        test_loss  = tf.keras.metrics.Mean()
 
-		tq = tqdm(val_batch)
-		for idx, (X, Y) in enumerate(tq, start=1):
-			loss = test_step(triplenet, X, Y)
-			test_loss.update_state(loss)
-			# Y_cap = triplenet(X, training=False)
-			# test_acc.update_state(Y, Y_cap)
-			# tq.set_description('Test Epoch: {}, Loss: {}'.format(epoch, test_loss.result(), test_acc.result()))
-			tq.set_description('Test Epoch: {}, Loss: {}'.format(epoch, test_loss.result()))
-			# break
-   
-		triplenet_ckpt.step.assign_add(1)
-		if (epoch%cfreq) == 0:
-			triplenet_ckptman.save()
+        # Train LSTM
+        tq = tqdm(train_batch)
+        for idx, (X, Y) in enumerate(tq, start=1):
+            loss = train_step(triplenet, opt, X, Y)
+            train_loss.update_state(loss)
+            tq.set_description(f'Train Epoch: {epoch}, Loss: {train_loss.result():.4f}')
 
-	# kmeanacc = 0.0
-	# tq = tqdm(test_batch)
-	# feat_X = []
-	# feat_Y = []
-	# for idx, (X, Y) in enumerate(tq, start=1):
-	# 	_, feat = triplenet(X, training=False)
-	# 	feat_X.extend(feat.numpy())
-	# 	feat_Y.extend(Y.numpy())
-	# feat_X = np.array(feat_X)
-	# feat_Y = np.array(feat_Y)
-	# print(feat_X.shape, feat_Y.shape)
-	# # colors = list(plt.cm.get_cmap('viridis', 10))
-	# # print(colors)
-	# # colors  = [np.random.rand(3,) for _ in range(10)]
-	# # print(colors)
-	# # Y_color = [colors[label] for label in feat_Y]
+        # Validate LSTM
+        tq = tqdm(val_batch)
+        for idx, (X, Y) in enumerate(tq, start=1):
+            loss = test_step(triplenet, X, Y)
+            test_loss.update_state(loss)
+            tq.set_description(f'Validation Epoch: {epoch}, Loss: {test_loss.result():.4f}')
 
-	# tsne = TSNE(n_components=2, verbose=1, perplexity=40, n_iter=700)
-	# tsne_results = tsne.fit_transform(feat_X)
-	# df = pd.DataFrame()
-	# df['label'] = feat_Y
-	# df['x1'] = tsne_results[:, 0]
-	# df['x2'] = tsne_results[:, 1]
-	# # df['x3'] = tsne_results[:, 2]
-	# df.to_csv('experiments/inference/triplet_embed2D.csv')
-	
-	# # df.to_csv('experiments/triplenet_embed3D.csv')
-	# # df = pd.read_csv('experiments/triplenet_embed2D.csv')
-	
-	# df = pd.read_csv('experiments/inference/triplet_embed2D.csv')
+        # Save Checkpoints
+        triplenet_ckpt.step.assign_add(1)
+        if (epoch % cfreq) == 0:
+            triplenet_ckptman.save()
 
-	# plt.figure(figsize=(16,10))
-	
-	# # ax = plt.axes(projection='3d')
-	# sns.scatterplot(
-	#     x="x1", y="x2",
-	#     data=df,
-	#     hue='label',
-	#     palette=sns.color_palette("hls", n_classes),
-	#     legend="full",
-	#     alpha=0.4
-	#     )
+    # Extract & Save Latent Representations
+    os.makedirs("saved_features", exist_ok=True)  # Create directory if it doesn't exist
+    print("Extracting EEG Latent Representations...")
 
-	# plt.show()
-	# # plt.savefig('experiments/inference/{}_embedding.png'.format(epoch))
+    latent_X = []
+    latent_Y = []
+    tq = tqdm(test_batch)
+    for idx, (X, Y) in enumerate(tq, start=1):
+        Y_emb, _ = triplenet(X, training=False)  # Get LSTM output
+        latent_X.extend(Y_emb.numpy())  # Store features
+        latent_Y.extend(Y.numpy())  # Store labels
+        print('Latent Y shape: ', latent_Y.shape)
 
-	# kmeans = KMeans(n_clusters=n_classes,random_state=45)
-	# kmeans.fit(feat_X)
-	# labels = kmeans.labels_
-	# # print(feat_Y, labels)
-	# correct_labels = sum(feat_Y == labels)
-	# print("Result: %d out of %d samples were correctly labeled." % (correct_labels, feat_Y.shape[0]))
-	# kmeanacc = correct_labels/float(feat_Y.shape[0])
-	# print('Accuracy score: {0:0.2f}'. format(kmeanacc))
+    latent_X = np.array(latent_X)
+    latent_Y = np.array(latent_Y)
+    print('Latent Y shape: ', latent_Y.shape)
 
-	# with open('experiments/triplenet_log.txt', 'a') as file:
-	# 	file.write('E: {}, Train Loss: {}, Test Loss: {}, KM Acc: {}\n'.\
-	# 		format(epoch, train_loss.result(), test_loss.result(), kmeanacc))
-	# break
+    # Save Features and Labels
+    np.save("saved_features/latent_features.npy", latent_X)  
+    with open("saved_features/latent_features.pkl", "wb") as f:
+        pickle.dump(latent_X, f)
+
+    np.save("saved_features/latent_labels.npy", latent_Y)  
+    with open("saved_features/latent_labels.pkl", "wb") as f:
+        pickle.dump(latent_Y, f)
+
+    print("Latent Representations Saved to 'saved_features/'")
+

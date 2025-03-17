@@ -29,6 +29,8 @@ class TripleNet(Model):
 		self.flat      = layers.Flatten()
 		self.w_1       = layers.Dense(units=n_features, activation='leaky_relu')
 		self.w_2       = layers.Dense(units=n_features)
+		self.projection_layer = layers.Dense(units=1024, activation="linear")
+		self.reshape_layer = layers.Reshape((4, 256))
 		# self.feat_norm  = layers.BatchNormalization()
 		# self.cls_layer  = layers.Dense(units=n_classes, kernel_regularizer=regularizers.l2(weight_decay))
 
@@ -37,30 +39,45 @@ class TripleNet(Model):
 			x = self.encoder[idx]( x )
 		# print(x.shape)
 		x = feat = self.flat( x )
+		projected_feat = self.projection_layer(feat)
+		reshaped_feat = self.reshape_layer(projected_feat) 
+		normalized_feat = tf.nn.l2_normalize(reshaped_feat, axis=-1)
 		# print(x.shape)
 		# x = feat = self.feat_layer( x )
 		# print(x.shape)
 		# x = self.feat_norm( x )
 		# x = self.cls_layer(x)
 		# x = self.w_2( self.w_1( x ) )
-		x = tf.nn.l2_normalize(x, axis=-1)
+		# x = tf.nn.l2_normalize(x, axis=-1)
 
-		return x, feat
-
-@tf.function
-def train_step(softnet, opt, X, Y):
-	with tf.GradientTape() as tape:
-		Y_emb, _ = softnet(X, training=True)
-		# loss  = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)(Y, Y_emb)
-		loss  = tfa.losses.TripletSemiHardLoss()(Y, Y_emb)
-	variables = softnet.trainable_variables
-	gradients = tape.gradient(loss, variables)
-	opt.apply_gradients(zip(gradients, variables))
-	return loss
+		return normalized_feat, feat
 
 @tf.function
-def test_step(softnet, X, Y):
-	Y_emb, _ = softnet(X, training=False)
-	loss  = tfa.losses.TripletSemiHardLoss()(Y, Y_emb)
-	# loss  = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)(Y, Y_emb)
-	return loss
+def train_step(model, optimizer, X, Y):
+    with tf.GradientTape() as tape:
+        Y_emb, _ = model(X, training=True)
+
+        Y_emb = tf.reshape(Y_emb, [tf.shape(Y_emb)[0], -1])  # Convert (batch, 4, 256) → (batch, 1024)
+
+        if len(Y.shape) > 1 and tf.shape(Y)[1] > 1:
+            Y = tf.argmax(Y, axis=1)  # Convert (batch, num_classes) → (batch,)
+
+        loss = tfa.losses.TripletSemiHardLoss()(Y, Y_emb)
+
+    gradients = tape.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+    return loss
+
+@tf.function
+def test_step(model, X, Y):
+    Y_emb, _ = model(X, training=False)
+
+    Y_emb = tf.reshape(Y_emb, [tf.shape(Y_emb)[0], -1])  # (batch, 4, 256) → (batch, 1024)
+
+    if len(Y.shape) > 1 and tf.shape(Y)[1] > 1:
+        Y = tf.argmax(Y, axis=1)  # Convert (batch, num_classes) → (batch,)
+
+    loss = tfa.losses.TripletSemiHardLoss()(Y, Y_emb)
+    return loss
+
+
