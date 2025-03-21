@@ -110,7 +110,6 @@ if __name__ == '__main__':
         Y_emb, _ = triplenet(X, training=False)  # Get LSTM output
         latent_X.extend(Y_emb.numpy())  # Store features
         latent_Y.extend(Y.numpy())  # Store labels
-        print('Latent Y shape: ', latent_Y.shape)
 
     latent_X = np.array(latent_X)
     latent_Y = np.array(latent_Y)
